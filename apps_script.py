@@ -9,7 +9,7 @@ from googleapiclient.errors import HttpError
 import typing as tp
 
 
-SCRIPT_ID = "AKfycbyKdKC7JMot7K7ZNUjgEmkhSt6fjt2ZVLSzF-r8XdOurQSY5HoiM1UEZJgFrbKATEiQkg"
+SCRIPT_ID = "AKfycbyWOxwe7oBOS4sdouwGaKeYOhDqikj-YGSlOE2JHmvUHWgrEKFbwKRZNAGTY4nYhKLcfg"
 
 
 class AppsScriptFunction(StrEnum):
@@ -33,7 +33,6 @@ class FormResponse:
     submission_timestamp: datetime
     language: Language
     level_id: int
-    stars: int
     showcase_link: str | None
 
 
@@ -74,9 +73,8 @@ class AppsScriptApiWrapper:
             form_responses.append(FormResponse(
                 submission_timestamp=datetime.strptime(row[0], '%m/%d/%Y %H:%M:%S'),
                 language=language,
-                level_id=int(row[2 if language == Language.EN else 5]),
-                stars=int(row[3 if language == Language.EN else 6]),
-                showcase_link=row[4 if language == Language.EN else 7] or None
+                level_id=int(row[2 if language == Language.EN else 4]),
+                showcase_link=row[3 if language == Language.EN else 5] or None
             ))
 
         return form_responses

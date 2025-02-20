@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from appdirs import user_config_dir
 from pathlib import Path
 import json
@@ -20,15 +20,20 @@ class Caretaker:
     start_announcement_text: str = ""  # TODO: Fill
     end_goodbye_text: str = ""  # TODO: Fill
     last_stream_id: str | None = None
+    last_stream_processed_levels: set[int] = field(default_factory=set)
 
 
     @classmethod
     def load(cls) -> Caretaker:
         if CONFIG_PATH.is_file():
-            return Caretaker(**json.loads(CONFIG_PATH.read_text()))
+            loaded_dict = json.loads(CONFIG_PATH.read_text())
+            loaded_dict["last_stream_processed_levels"] = set(loaded_dict["last_stream_processed_levels"])
+            return Caretaker(**loaded_dict)
 
         CONFIG_DIR_PATH.mkdir(parents=True, exist_ok=True)
         return Caretaker()
 
     def save(self):
-        CONFIG_PATH.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=4))
+        saved_dict = asdict(self)
+        saved_dict["last_stream_processed_levels"] = list(saved_dict["last_stream_processed_levels"])
+        CONFIG_PATH.write_text(json.dumps(saved_dict, ensure_ascii=False, indent=4))
