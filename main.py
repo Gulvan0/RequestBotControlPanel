@@ -18,7 +18,11 @@ import twitch
 
 
 def normalize_bot_request(request_from_bot_api: Request) -> OpenRequest | None:
-    level = get_level(request_from_bot_api.level_id)
+    try:
+        level = get_level(request_from_bot_api.level_id)
+    except Exception:
+        return None
+
     if not level:
         return None
 
@@ -36,12 +40,22 @@ def normalize_bot_request(request_from_bot_api: Request) -> OpenRequest | None:
 
 class Application:
     def get_current_broadcast(self) -> BroadcastInfo | None:
-        yt_video_id = self.youtube.get_live_stream_video_id(self.caretaker.youtube_channel_id)
+        try:
+            yt_video_id = self.youtube.get_live_stream_video_id(self.caretaker.youtube_channel_id)
+        except Exception:
+            yt_video_id = None
+
         if yt_video_id:
             return BroadcastInfo(yt_video_id, True)
-        twitch_stream_id = twitch.get_stream_id(self.caretaker.twitch_login)
+
+        try:
+            twitch_stream_id = twitch.get_stream_id(self.caretaker.twitch_login)
+        except Exception:
+            twitch_stream_id = None
+
         if twitch_stream_id:
             return BroadcastInfo(twitch_stream_id, False)
+
         return None
 
     def save_settings(self) -> None:
@@ -72,7 +86,10 @@ class Application:
 
     # TODO: Account for exceptions in all external service interactions, act accordingly (warn and ask for a manual action or require a restart)
     def perform_stream_startup_routine(self) -> None:
-        self.app_script.execute_function(AppsScriptFunction.REOPEN_FORM)
+        try:
+            self.app_script.execute_function(AppsScriptFunction.REOPEN_FORM)
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to reopen the form due to the exception: {e}\nYou might have to do it manually")
 
         substitutions = dict(
             video_link=self.video_link,
@@ -81,23 +98,33 @@ class Application:
         )
         announcement_text = jinja2.Template(self.caretaker.start_announcement_text).render(substitutions)
 
-        self.request_bot.post(
-            endpoint=RequestBotApiEndpoint.SEND_MESSAGE,
-            payload=construct_message_payload(
-                text=announcement_text,
-                target_route_id=RequestBotRouteID.START_ANNOUNCEMENT
+        try:
+            self.request_bot.post(
+                endpoint=RequestBotApiEndpoint.SEND_MESSAGE,
+                payload=construct_message_payload(
+                    text=announcement_text,
+                    target_route_id=RequestBotRouteID.START_ANNOUNCEMENT
+                )
             )
-        )
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}\nStream announcement has not been sent, you might have to do it manually")
 
         if self.yt_live_chat_id:
-            self.youtube.post_message_to_live_chat(self.yt_live_chat_id, self.caretaker.form_link)
+            try:
+                self.youtube.post_message_to_live_chat(self.yt_live_chat_id, self.caretaker.form_link)
+            except Exception as e:
+                messagebox.showerror(None, f"Failed to send form link to stream chat due to the exception: {e}\nYou might have to do it manually")
         else:
             self.resend_form_link_btn.config(state='disabled')
 
     def shift_to_stream_layout(self) -> None:
         if self.current_broadcast.is_youtube:
             self.video_link = f"https://www.youtube.com/watch?v={self.current_broadcast.video_id}"
-            self.yt_live_chat_id = self.youtube.get_live_chat_id(self.current_broadcast.video_id)
+            try:
+                self.yt_live_chat_id = self.youtube.get_live_chat_id(self.current_broadcast.video_id)
+            except Exception as e:
+                self.yt_live_chat_id = None
+                messagebox.showerror(None, f"Failed to get the stream chat due to the exception: {e}\nYou will have to send form link manually when needed")
         else:
             self.video_link = f"https://www.twitch.tv/{self.caretaker.twitch_login}"
             self.yt_live_chat_id = None
@@ -120,30 +147,44 @@ class Application:
             messagebox.showerror(None, "There is no active livestream on the selected channel. Did you specify channel ID in the Options tab correctly?")
 
     def on_end_stream_pressed(self) -> None:
-        self.app_script.execute_function(AppsScriptFunction.CLOSE_FORM)
+        try:
+            self.app_script.execute_function(AppsScriptFunction.CLOSE_FORM)
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to close the form due to the exception: {e}\nYou might have to do it manually")
+
+        self.process_new_responses()
 
         dump = self.dump_remaining_requests_var.get()
-        requests = self.app_script.close_remaining_requests(dump)
+
+        try:
+            requests = self.app_script.close_remaining_requests(dump)
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to close remaining requests in Google Sheets due to the exception: {e}\nYou might have to do it manually")
+            requests = []
 
         if dump:
-            self.process_new_responses()
+            try:
+                self.request_bot.post(
+                    RequestBotApiEndpoint.CREATE_REQUEST_BATCH,
+                    [
+                        construct_request_creation_payload(request, self.video_link)
+                        for request in requests
+                        if request.level_id != self.current_level_id
+                    ]
+                )
+            except Exception as e:
+                messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}\nSome requests might have not been dumped")
 
+        try:
             self.request_bot.post(
-                RequestBotApiEndpoint.CREATE_REQUEST_BATCH,
-                [
-                    construct_request_creation_payload(request, self.video_link)
-                    for request in requests
-                    if request.level_id != self.current_level_id
-                ]
+                endpoint=RequestBotApiEndpoint.SEND_MESSAGE,
+                payload=construct_message_payload(
+                    text=self.caretaker.end_goodbye_text,
+                    target_route_id=RequestBotRouteID.END_GOODBYE
+                )
             )
-
-        self.request_bot.post(
-            endpoint=RequestBotApiEndpoint.SEND_MESSAGE,
-            payload=construct_message_payload(
-                text=self.caretaker.end_goodbye_text,
-                target_route_id=RequestBotRouteID.END_GOODBYE
-            )
-        )
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}")
 
         self.root.destroy()
 
@@ -151,14 +192,26 @@ class Application:
         self.process_new_responses()
 
         pick_oldest = self.pick_oldest_var.get()
-        picked_request = self.app_script.pick_open_request(pick_oldest)
+        try:
+            picked_request = self.app_script.pick_open_request(pick_oldest)
+        except Exception:
+            picked_request = None
+
         is_from_bot = False
         self.current_request_id = None
+
         if not picked_request:
-            bot_request = self.request_bot.pick_request(pick_oldest)
-            self.current_request_id = bot_request.id
-            is_from_bot = True
-            picked_request = normalize_bot_request(bot_request) if bot_request else None
+            try:
+                bot_request = self.request_bot.pick_request(pick_oldest)
+            except Exception as e:
+                messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}")
+                return False
+            else:
+                if bot_request:
+                    self.current_request_id = bot_request.id
+                    is_from_bot = True
+                    picked_request = normalize_bot_request(bot_request)
+
         if not picked_request:
             messagebox.showerror(None, "No requests yet!")
             return False
@@ -166,7 +219,11 @@ class Application:
         self.current_level_id = picked_request.level_id
 
         if not self.current_request_id:
-            self.current_request_id = self.request_bot.post(RequestBotApiEndpoint.CREATE_REQUEST, construct_request_creation_payload(picked_request, self.video_link))
+            try:
+                self.current_request_id = self.request_bot.post(RequestBotApiEndpoint.CREATE_REQUEST, construct_request_creation_payload(picked_request, self.video_link))
+            except Exception as e:
+                messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}")
+                return False
 
         header = f"Request {self.current_request_id}"
         if is_from_bot:
@@ -218,47 +275,78 @@ class Application:
             self.later_btn.pack_forget()
 
     def on_opinion_btn_pressed(self, send_type: SendType) -> None:
-        self.request_bot.post(
-            endpoint=RequestBotApiEndpoint.RESOLVE_REQUEST,
-            payload=construct_request_resolution_payload(
-                request_id=self.current_request_id,
-                sent_for=send_type,
-                stream_link=self.video_link  # TODO: Use timecodes (if youtube)
+        try:
+            self.request_bot.post(
+                endpoint=RequestBotApiEndpoint.RESOLVE_REQUEST,
+                payload=construct_request_resolution_payload(
+                    request_id=self.current_request_id,
+                    sent_for=send_type,
+                    stream_link=self.video_link  # TODO: Use timecodes (if youtube)
+                )
             )
-        )
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}")
+            return
 
-        self.app_script.execute_function(AppsScriptFunction.RESOLVE_REQUEST, [self.current_level_id, send_type.get_apps_script_value()])
+        try:
+            self.app_script.execute_function(AppsScriptFunction.RESOLVE_REQUEST, [self.current_level_id, send_type.get_apps_script_value()])
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}. You should mark the request as resolved manually")
+            return
 
         self.pick_next_request()
 
     def on_later_pressed(self) -> None:
-        self.request_bot.post(
-            endpoint=RequestBotApiEndpoint.PRE_APPROVE_REQUEST,
-            payload=construct_request_pre_approval_payload(
-                request_id=self.current_request_id
+        try:
+            self.request_bot.post(
+                endpoint=RequestBotApiEndpoint.PRE_APPROVE_REQUEST,
+                payload=construct_request_pre_approval_payload(
+                    request_id=self.current_request_id
+                )
             )
-        )
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}")
+            return
 
-        self.app_script.execute_function(AppsScriptFunction.RESOLVE_REQUEST, [self.current_level_id, "later"])
+        try:
+            self.app_script.execute_function(AppsScriptFunction.RESOLVE_REQUEST, [self.current_level_id, "later"])
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}. You should mark the request as resolved manually")
+            return
 
         self.pick_next_request()
 
     def on_resend_form_link_pressed(self) -> None:
         if self.yt_live_chat_id:
-            self.youtube.post_message_to_live_chat(self.yt_live_chat_id, self.caretaker.form_link)
+            try:
+                self.youtube.post_message_to_live_chat(self.yt_live_chat_id, self.caretaker.form_link)
+            except Exception as e:
+                messagebox.showerror(None, f"Failed to send form link to stream chat due to the exception: {e}\nYou might have to do it manually")
 
     def on_clear_queue_pressed(self) -> None:
-        self.app_script.execute_function(AppsScriptFunction.REOPEN_FORM)
+        try:
+            self.app_script.execute_function(AppsScriptFunction.REOPEN_FORM)
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to reopen the form due to the exception: {e}\nYou might have to do it manually")
 
-    # TODO: Account for exceptions in all external service interactions, act accordingly (warn and ask for a manual action or require a restart)
     def process_new_responses(self) -> None:
         rows = []
-        for response in self.app_script.get_new_responses():
+
+        try:
+            new_responses = self.app_script.get_new_responses()
+        except Exception:
+            new_responses = []
+
+        for response in new_responses:
             if response.level_id in self.caretaker.last_stream_processed_levels:
                 continue
             self.caretaker.last_stream_processed_levels.add(response.level_id)
 
-            level = get_level(response.level_id)
+            try:
+                level = get_level(response.level_id)
+            except Exception:
+                continue
+
             if not level or level.grade != LevelGrade.UNRATED:
                 continue
 
@@ -273,9 +361,15 @@ class Application:
                 response.showcase_link
             ])
 
-        self.app_script.execute_function(AppsScriptFunction.APPEND_OPEN_REQUESTS, [rows])
+        try:
+            self.app_script.execute_function(AppsScriptFunction.APPEND_OPEN_REQUESTS, [rows])
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}\nSome requests may have been lost")
 
-        self.app_script.execute_function(AppsScriptFunction.CLEAR_NEW_RESPONSES)
+        try:
+            self.app_script.execute_function(AppsScriptFunction.CLEAR_NEW_RESPONSES)
+        except Exception:
+            pass  # It's fine, those responses will get filtered next time because we exclude requests made for the already processed level
 
         self.caretaker.save()
 
