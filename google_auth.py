@@ -3,7 +3,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-from pathlib import Path
+from paths import TOKEN_PATH
 
 
 AUTH_SCOPES = [
@@ -14,12 +14,12 @@ AUTH_SCOPES = [
 ]
 
 
-def get_credentials(token_path: Path, client_secret_path: str) -> Credentials:
+def get_credentials(client_secret_path: str) -> Credentials:
     creds = None
 
-    if token_path.is_file():
+    if TOKEN_PATH.is_file():
         try:
-            creds = Credentials.from_authorized_user_file(str(token_path), AUTH_SCOPES)
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), AUTH_SCOPES)
             creds.refresh(Request())
         except google.auth.exceptions.RefreshError as error:
             creds = None
@@ -31,6 +31,6 @@ def get_credentials(token_path: Path, client_secret_path: str) -> Credentials:
         else:
             flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, AUTH_SCOPES)
             creds = flow.run_local_server()
-        token_path.write_text(creds.to_json())
+        TOKEN_PATH.write_text(creds.to_json())
 
     return creds

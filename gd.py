@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from enum import StrEnum, IntEnum, Enum, auto
+from time import sleep
 
 import requests
 from datetime import datetime, timedelta
@@ -105,30 +105,28 @@ class Level:
 class ApiWrapper:
     def __init__(self):
         self.last_api_call: datetime | None = None
-        self.api_call_lock = asyncio.Lock()
         self.api_call_interval = timedelta(seconds=0.6)
 
-    async def perform_request(self, endpoint: Endpoint, data: dict) -> str | None:
-        async with self.api_call_lock:
-            if self.last_api_call:
-                time_passed = datetime.now() - self.last_api_call
-                remaining_seconds = (self.api_call_interval - time_passed).total_seconds()
-                if remaining_seconds > 0:
-                    await asyncio.sleep(remaining_seconds)
+    def perform_request(self, endpoint: Endpoint, data: dict) -> str | None:
+        if self.last_api_call:
+            time_passed = datetime.now() - self.last_api_call
+            remaining_seconds = (self.api_call_interval - time_passed).total_seconds()
+            if remaining_seconds > 0:
+                sleep(remaining_seconds)
 
-            data.update(secret="Wmfd2893gb7")
+        data.update(secret="Wmfd2893gb7")
 
-            response = requests.post(
-                url=endpoint,
-                data=data,
-                headers={"User-Agent": ""}
-            ).text
+        response = requests.post(
+            url=endpoint,
+            data=data,
+            headers={"User-Agent": ""}
+        ).text
 
-            self.last_api_call = datetime.now()
+        self.last_api_call = datetime.now()
 
-            if response == "-1":
-                return None
-            return response
+        if response == "-1":
+            return None
+        return response
 
 
 API = ApiWrapper()
@@ -143,8 +141,8 @@ def _get_level_author_name(api_response_parts: list[str]) -> str:
     return api_response_parts[1].split(":")[1]
 
 
-async def get_level(level_id: int) -> Level | None:
-    raw_response = await API.perform_request(
+def get_level(level_id: int) -> Level | None:
+    raw_response = API.perform_request(
         Endpoint.GET_LEVELS,
         dict(
             type=19,
