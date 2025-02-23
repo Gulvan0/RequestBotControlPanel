@@ -104,4 +104,4 @@ class AppsScriptApiWrapper:
 
     def close_remaining_requests(self, will_be_dumped: bool) -> list[OpenRequest]:
         response = self.execute_function(AppsScriptFunction.CLOSE_REMAINING_OPEN_REQUESTS, [will_be_dumped])
-        return list(map(build_open_request_from_row, response['response']['result']))
+        return list(map(build_open_request_from_row, response['response']['result'])) if 'result' in response['response'] else []

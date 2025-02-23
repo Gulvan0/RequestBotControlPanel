@@ -1,17 +1,17 @@
 from functools import partial
-from tkinter import messagebox, Text, Tk, ttk, BooleanVar
-from tkinter.constants import CENTER, END, LEFT, TOP
+from tkinter import messagebox, Tk, ttk, BooleanVar
+from tkinter.constants import CENTER, LEFT, TOP
 
 import jinja2
 
 from apps_script import AppsScriptApiWrapper, AppsScriptFunction
 from common_types import BroadcastInfo, Language, OpenRequest, SendType
 from component_builder import BasicText, build_button, build_horizontal_centered_frame, build_image, build_option_row, build_tabs, ReadOnlyText
-from gd import get_level, LevelGrade, RequestedDifficulty
+from gd import get_level, get_levels, LevelGrade, RequestedDifficulty
 from google_auth import get_credentials
 from caretaker import Caretaker
 from request_bot import construct_message_payload, construct_request_creation_payload, construct_request_pre_approval_payload, construct_request_resolution_payload, Request, RequestBotApiEndpoint, RequestBotApiWrapper, RequestBotRouteID
-from yt import YoutubeApiWrapper
+from yt import YoutubeApiWrapper, YoutubeLiveStreamingDetails
 
 import sv_ttk
 import twitch
@@ -58,6 +58,11 @@ class Application:
 
         return None
 
+    def get_video_link_with_timecode(self) -> str:
+        if self.current_broadcast.is_youtube and self.current_request_timecode:
+            return f"{self.video_link}&t={self.current_request_timecode + 10}"  # A streamer needs some time to react, find level etc. We'll be more accurate this way
+        return self.video_link
+
     def save_settings(self) -> None:
         self.caretaker.api_root_url = self.api_root_url_entry.get_text()
         self.caretaker.api_token = self.token_entry.get_text()
@@ -84,7 +89,6 @@ class Application:
         self.save_settings()
         self.destroyed = True
 
-    # TODO: Account for exceptions in all external service interactions, act accordingly (warn and ask for a manual action or require a restart)
     def perform_stream_startup_routine(self) -> None:
         try:
             self.app_script.execute_function(AppsScriptFunction.REOPEN_FORM)
@@ -109,9 +113,9 @@ class Application:
         except Exception as e:
             messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}\nStream announcement has not been sent, you might have to do it manually")
 
-        if self.yt_live_chat_id:
+        if self.yt_live_streaming_details and self.yt_live_streaming_details.live_chat_id:
             try:
-                self.youtube.post_message_to_live_chat(self.yt_live_chat_id, self.caretaker.form_link)
+                self.youtube.post_message_to_live_chat(self.yt_live_streaming_details.live_chat_id, self.caretaker.form_link)
             except Exception as e:
                 messagebox.showerror(None, f"Failed to send form link to stream chat due to the exception: {e}\nYou might have to do it manually")
         else:
@@ -121,13 +125,13 @@ class Application:
         if self.current_broadcast.is_youtube:
             self.video_link = f"https://www.youtube.com/watch?v={self.current_broadcast.video_id}"
             try:
-                self.yt_live_chat_id = self.youtube.get_live_chat_id(self.current_broadcast.video_id)
+                self.yt_live_streaming_details = self.youtube.get_live_streaming_details(self.current_broadcast.video_id)
             except Exception as e:
-                self.yt_live_chat_id = None
+                self.yt_live_streaming_details = None
                 messagebox.showerror(None, f"Failed to get the stream chat due to the exception: {e}\nYou will have to send form link manually when needed")
         else:
             self.video_link = f"https://www.twitch.tv/{self.caretaker.twitch_login}"
-            self.yt_live_chat_id = None
+            self.yt_live_streaming_details = None
 
         self.start_stream_btn.pack_forget()
         self.streaming_mode_frame.pack(side=TOP, expand=True, fill='both')
@@ -189,6 +193,10 @@ class Application:
         self.root.destroy()
 
     def pick_new_request(self) -> bool:
+        self.current_request_timecode = None
+        self.current_request_id = None
+        self.current_level_id = None
+
         self.process_new_responses()
 
         pick_oldest = self.pick_oldest_var.get()
@@ -198,8 +206,6 @@ class Application:
             picked_request = None
 
         is_from_bot = False
-        self.current_request_id = None
-
         if not picked_request:
             try:
                 bot_request = self.request_bot.pick_request(pick_oldest)
@@ -220,7 +226,13 @@ class Application:
 
         if not self.current_request_id:
             try:
-                self.current_request_id = self.request_bot.post(RequestBotApiEndpoint.CREATE_REQUEST, construct_request_creation_payload(picked_request, self.video_link))
+                self.current_request_id = self.request_bot.post(
+                    RequestBotApiEndpoint.CREATE_REQUEST,
+                    construct_request_creation_payload(
+                        picked_request,
+                        self.get_video_link_with_timecode()
+                    )
+                )
             except Exception as e:
                 messagebox.showerror(None, f"Failed to access bot api due to the exception: {e}")
                 return False
@@ -249,30 +261,52 @@ class Application:
         if self.alternate_var.get():
             self.pick_oldest_var.set(not pick_oldest)
 
+        if self.yt_live_streaming_details:
+            self.current_request_timecode = self.yt_live_streaming_details.get_current_duration_in_seconds()
+
         return True
 
-    def on_pick_first_request_pressed(self) -> None:
-        if self.pick_new_request():
-            self.pick_first_request_btn.pack_forget()
-            self.starrate_btn.pack(side=LEFT, padx=5)
-            self.feature_btn.pack(side=LEFT, padx=5)
-            self.epic_btn.pack(side=LEFT, padx=5)
-            self.mythic_btn.pack(side=LEFT, padx=5)
-            self.legendary_btn.pack(side=LEFT, padx=5)
-            self.reject_btn.pack(side=LEFT, padx=5)
-            self.later_btn.pack(side=LEFT, padx=5)
+    def shift_to_non_first_request_mode(self) -> None:
+        self.pick_first_request_btn.pack_forget()
+        self.starrate_btn.pack(side=LEFT, padx=5)
+        self.feature_btn.pack(side=LEFT, padx=5)
+        self.epic_btn.pack(side=LEFT, padx=5)
+        self.mythic_btn.pack(side=LEFT, padx=5)
+        self.legendary_btn.pack(side=LEFT, padx=5)
+        self.reject_btn.pack(side=LEFT, padx=5)
+        self.later_btn.pack(side=LEFT, padx=5)
 
-    def pick_next_request(self) -> None:
-        if not self.pick_new_request():
-            self.request_details_entry.set_text("Pick the request to continue")
-            self.pick_first_request_btn.pack(side=LEFT)
-            self.starrate_btn.pack_forget()
-            self.feature_btn.pack_forget()
-            self.epic_btn.pack_forget()
-            self.mythic_btn.pack_forget()
-            self.legendary_btn.pack_forget()
-            self.reject_btn.pack_forget()
-            self.later_btn.pack_forget()
+    def shift_to_first_request_mode(self) -> None:
+        self.request_details_entry.set_text("Pick the request to continue")
+        self.pick_first_request_btn.pack(side=LEFT)
+        self.starrate_btn.pack_forget()
+        self.feature_btn.pack_forget()
+        self.epic_btn.pack_forget()
+        self.mythic_btn.pack_forget()
+        self.legendary_btn.pack_forget()
+        self.reject_btn.pack_forget()
+        self.later_btn.pack_forget()
+
+    def pick_new_request_with_window_locking(self, is_first: bool) -> None:
+        def callback_for_first_request():
+            if self.pick_new_request():
+                self.shift_to_non_first_request_mode()
+            else:
+                self.request_details_entry.set_text("Pick the request to continue")
+            self.root.grab_release()
+
+        def callback_for_non_first_request():
+            if not self.pick_new_request():
+                self.shift_to_first_request_mode()
+                self.request_details_entry.set_text("Pick the request to continue")
+            self.root.grab_release()
+
+        self.request_details_entry.set_text("Please wait")
+        self.root.grab_set()
+        self.root.after(10, callback_for_first_request if is_first else callback_for_non_first_request)
+
+    def on_pick_first_request_pressed(self) -> None:
+        self.pick_new_request_with_window_locking(is_first=True)
 
     def on_opinion_btn_pressed(self, send_type: SendType) -> None:
         try:
@@ -281,7 +315,7 @@ class Application:
                 payload=construct_request_resolution_payload(
                     request_id=self.current_request_id,
                     sent_for=send_type,
-                    stream_link=self.video_link  # TODO: Use timecodes (if youtube)
+                    stream_link=self.get_video_link_with_timecode()
                 )
             )
         except Exception as e:
@@ -294,7 +328,7 @@ class Application:
             messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}. You should mark the request as resolved manually")
             return
 
-        self.pick_next_request()
+        self.pick_new_request_with_window_locking(is_first=False)
 
     def on_later_pressed(self) -> None:
         try:
@@ -314,12 +348,12 @@ class Application:
             messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}. You should mark the request as resolved manually")
             return
 
-        self.pick_next_request()
+        self.pick_new_request_with_window_locking(is_first=False)
 
     def on_resend_form_link_pressed(self) -> None:
-        if self.yt_live_chat_id:
+        if self.yt_live_streaming_details and self.yt_live_streaming_details.live_chat_id:
             try:
-                self.youtube.post_message_to_live_chat(self.yt_live_chat_id, self.caretaker.form_link)
+                self.youtube.post_message_to_live_chat(self.yt_live_streaming_details.live_chat_id, self.caretaker.form_link)
             except Exception as e:
                 messagebox.showerror(None, f"Failed to send form link to stream chat due to the exception: {e}\nYou might have to do it manually")
 
@@ -330,23 +364,27 @@ class Application:
             messagebox.showerror(None, f"Failed to reopen the form due to the exception: {e}\nYou might have to do it manually")
 
     def process_new_responses(self) -> None:
-        rows = []
-
         try:
             new_responses = self.app_script.get_new_responses()
         except Exception:
-            new_responses = []
+            return
 
+        retrieved_levels = dict()
         for response in new_responses:
-            if response.level_id in self.caretaker.last_stream_processed_levels:
-                continue
-            self.caretaker.last_stream_processed_levels.add(response.level_id)
+            if response.level_id not in self.caretaker.last_stream_processed_levels:
+                retrieved_levels[response.level_id] = response
+        if not retrieved_levels:
+            return
 
-            try:
-                level = get_level(response.level_id)
-            except Exception:
-                continue
+        try:
+            level_data = get_levels(list(retrieved_levels.keys()))
+        except Exception as e:
+            messagebox.showerror(None, f"Failed to access GD API due to the exception: {e}\nPlease retry")
+            return
+        rows = []
 
+        for level_id, response in retrieved_levels.items():
+            level = level_data.get(level_id)
             if not level or level.grade != LevelGrade.UNRATED:
                 continue
 
@@ -355,7 +393,7 @@ class Application:
                 response.language.value,
                 level.name,
                 level.author_name,
-                str(response.level_id),
+                str(level_id),
                 str(level.stars_requested) if level.stars_requested else "NA",
                 RequestedDifficulty.from_stars(level.stars_requested).value if level.stars_requested else "Unrated",
                 response.showcase_link
@@ -364,26 +402,34 @@ class Application:
         try:
             self.app_script.execute_function(AppsScriptFunction.APPEND_OPEN_REQUESTS, [rows])
         except Exception as e:
-            messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}\nSome requests may have been lost")
+            messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}\nPlease retry")
+            return
 
         try:
             self.app_script.execute_function(AppsScriptFunction.CLEAR_NEW_RESPONSES)
         except Exception:
             pass  # It's fine, those responses will get filtered next time because we exclude requests made for the already processed level
 
+        self.caretaker.last_stream_processed_levels |= set(retrieved_levels.keys())
         self.caretaker.save()
 
     def __init__(self) -> None:
         self.destroyed = False
         self.caretaker = Caretaker.load()
 
-        self.current_broadcast = None  # Will be updated on the startup
-        self.video_link = ""  # Will be defined once the "Start Stream" btn is pressed
-        self.yt_live_chat_id = ""  # Will be defined once the "Start Stream" btn is pressed
-        self.current_request_id = 0  # Will be defined once the first request is picked
-        self.current_level_id = 0  # Will be defined once the first request is picked
+        # Will be updated on the startup
+        self.current_broadcast: BroadcastInfo | None = None
 
-        google_creds = get_credentials(client_secret_path="client_secret.json")
+        # Will be defined once the "Start Stream" btn is pressed
+        self.video_link: str | None = None
+        self.yt_live_streaming_details: YoutubeLiveStreamingDetails | None = None
+
+        # Will be defined once the first request is picked and updated with every new request
+        self.current_request_timecode: int | None = None
+        self.current_request_id: int | None = None
+        self.current_level_id: int | None = None
+
+        google_creds = get_credentials()
         self.app_script = AppsScriptApiWrapper(google_creds)
         self.youtube = YoutubeApiWrapper(google_creds)
         self.request_bot = RequestBotApiWrapper(self.caretaker.api_root_url, self.caretaker.api_token)

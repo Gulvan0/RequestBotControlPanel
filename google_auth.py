@@ -3,7 +3,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-from paths import TOKEN_PATH
+from paths import TOKEN_PATH, CLIENT_SECRET_PATH, TMP_CLIENT_SECRET_SEARCH_PATH
 
 
 AUTH_SCOPES = [
@@ -14,8 +14,12 @@ AUTH_SCOPES = [
 ]
 
 
-def get_credentials(client_secret_path: str) -> Credentials:
+def get_credentials() -> Credentials:
     creds = None
+
+    if not CLIENT_SECRET_PATH.is_file():
+        CLIENT_SECRET_PATH.write_text(TMP_CLIENT_SECRET_SEARCH_PATH.read_text())
+        TMP_CLIENT_SECRET_SEARCH_PATH.unlink()
 
     if TOKEN_PATH.is_file():
         try:
@@ -29,7 +33,7 @@ def get_credentials(client_secret_path: str) -> Credentials:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, AUTH_SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_PATH), AUTH_SCOPES)
             creds = flow.run_local_server()
         TOKEN_PATH.write_text(creds.to_json())
 

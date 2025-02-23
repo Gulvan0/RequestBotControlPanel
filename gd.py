@@ -13,6 +13,7 @@ class Endpoint(StrEnum):
 
 
 class LevelFieldKey(IntEnum):
+    LEVEL_ID = 1
     LEVEL_NAME = 2
     AUTHOR_PLAYER_ID = 6
     DIFFICULTY_NUMERATOR = 9
@@ -91,6 +92,7 @@ class LevelGrade(Enum):
 
 @dataclass
 class Level:
+    level_id: int
     name: str
     author_name: str
     difficulty: LevelDifficulty
@@ -105,7 +107,7 @@ class Level:
 class ApiWrapper:
     def __init__(self):
         self.last_api_call: datetime | None = None
-        self.api_call_interval = timedelta(seconds=0.6)
+        self.api_call_interval = timedelta(seconds=0.51)
 
     def perform_request(self, endpoint: Endpoint, data: dict) -> str | None:
         if self.last_api_call:
@@ -132,29 +134,18 @@ class ApiWrapper:
 API = ApiWrapper()
 
 
-def _get_level_fields(api_response_parts: list[str]) -> dict[int, str]:
-    splitted = api_response_parts[0].split(":")
+def _get_level_fields(level_string: str) -> dict[int, str]:
+    splitted = level_string.split(":")
     return dict(zip(map(int, splitted[::2]), splitted[1::2]))
 
 
-def _get_level_author_name(api_response_parts: list[str]) -> str:
-    return api_response_parts[1].split(":")[1]
+def _parse_level(level_string: str, *, player_id_to_creator_name_mapping: dict[int, str] | None = None, precalculated_author_name: str | None = None) -> Level:
+    assert player_id_to_creator_name_mapping is not None or precalculated_author_name is not None
 
+    level_fields = _get_level_fields(level_string)
 
-def get_level(level_id: int) -> Level | None:
-    raw_response = API.perform_request(
-        Endpoint.GET_LEVELS,
-        dict(
-            type=19,
-            str=str(level_id)
-        )
-    )
-    if not raw_response:
-        return None
-
-    response_parts = raw_response.split("#")
-    level_fields = _get_level_fields(response_parts)
-    author_name = _get_level_author_name(response_parts)
+    author_player_id = int(level_fields.get(LevelFieldKey.AUTHOR_PLAYER_ID))
+    author_name = precalculated_author_name or player_id_to_creator_name_mapping.get(author_player_id, "Anonymous")
 
     if level_fields.get(LevelFieldKey.AUTO) == '1':
         difficulty = LevelDifficulty.AUTO
@@ -212,6 +203,7 @@ def get_level(level_id: int) -> Level | None:
                 grade = LevelGrade.FEATURED
 
     return Level(
+        level_id=int(level_fields[LevelFieldKey.LEVEL_ID]),
         name=level_fields[LevelFieldKey.LEVEL_NAME],
         author_name=author_name,
         difficulty=difficulty,
@@ -222,3 +214,55 @@ def get_level(level_id: int) -> Level | None:
         grade=grade,
         copied_level_id=int(level_fields[LevelFieldKey.COPIED_ID]) or None
     )
+
+
+def get_levels(level_ids: list[int]) -> dict[int, Level]:
+    batch_size = 10  # We can't retrieve more than 10 levels per call
+
+    current_batch_start = 0
+    total_levels = len(level_ids)
+
+    result = {}
+
+    while current_batch_start < total_levels:
+        current_batch_ids = level_ids[current_batch_start:current_batch_start + batch_size]
+
+        raw_response = API.perform_request(
+            Endpoint.GET_LEVELS,
+            dict(
+                type=19,
+                str=','.join(map(str, current_batch_ids))
+            )
+        )
+
+        response_parts = raw_response.split("#")
+        level_strings = response_parts[0].split("|")
+        creator_strings = response_parts[1].split("|")
+
+        player_id_to_creator_name_mapping = {}
+        for creator_string in creator_strings:
+            creator_string_parts = creator_string.split(":")
+            player_id_to_creator_name_mapping[int(creator_string_parts[0])] = creator_string_parts[1]
+
+        for level_string in level_strings:
+            level = _parse_level(level_string, player_id_to_creator_name_mapping=player_id_to_creator_name_mapping)
+            result[level.level_id] = level
+
+        current_batch_start += batch_size
+
+    return result
+
+
+def get_level(level_id: int) -> Level | None:
+    raw_response = API.perform_request(
+        Endpoint.GET_LEVELS,
+        dict(
+            type=19,
+            str=str(level_id)
+        )
+    )
+    if not raw_response:
+        return None
+
+    response_parts = raw_response.split("#")
+    return _parse_level(response_parts[0], precalculated_author_name=response_parts[1].split(":")[1])
