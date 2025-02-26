@@ -9,18 +9,14 @@ from common_types import OpenRequest, SendType
 
 
 class RequestBotApiEndpoint(StrEnum):
-    SEND_MESSAGE = "/message/send"
+    SEND_STREAM_START_MESSAGE = "/message/stream_start"
+    SEND_STREAM_END_MESSAGE = "/message/stream_end"
     RESOLVE_REQUEST = "/request/resolve"
     PRE_APPROVE_REQUEST = "/request/preapprove"
     CREATE_REQUEST = "/request/create"
     CREATE_REQUEST_BATCH = "/request/create_batch"
     GET_RANDOM_REQUEST = "/request/random"
     GET_OLDEST_REQUEST = "/request/oldest"
-
-
-class RequestBotRouteID(StrEnum):
-    START_ANNOUNCEMENT = "stream_start_announcement"
-    END_GOODBYE = "stream_end_goodbye"
 
 
 class Request(BaseModel):
@@ -38,10 +34,6 @@ class Request(BaseModel):
     resolution_message_channel_id: int | None
     created_at: datetime
     requested_at: datetime | None
-
-
-def construct_message_payload(text: str, target_route_id: RequestBotRouteID) -> dict:
-    return dict(text=text, target_route_id=target_route_id.value)
 
 
 def construct_request_creation_payload(request: OpenRequest, placeholder_yt_link: str) -> dict:

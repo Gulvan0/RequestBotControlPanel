@@ -145,7 +145,7 @@ def _parse_level(level_string: str, *, player_id_to_creator_name_mapping: dict[i
     level_fields = _get_level_fields(level_string)
 
     author_player_id = int(level_fields.get(LevelFieldKey.AUTHOR_PLAYER_ID))
-    author_name = precalculated_author_name or player_id_to_creator_name_mapping.get(author_player_id, "Anonymous")
+    author_name = precalculated_author_name or player_id_to_creator_name_mapping.get(author_player_id, "Anonymous Creator")
 
     if level_fields.get(LevelFieldKey.AUTO) == '1':
         difficulty = LevelDifficulty.AUTO
@@ -235,14 +235,19 @@ def get_levels(level_ids: list[int]) -> dict[int, Level]:
             )
         )
 
+        if not raw_response:
+            continue
+
         response_parts = raw_response.split("#")
-        level_strings = response_parts[0].split("|")
-        creator_strings = response_parts[1].split("|")
+        level_strings = response_parts[0].split("|") if response_parts and response_parts[0] else []
+        creator_strings = response_parts[1].split("|") if len(response_parts) > 1 and response_parts[1] else []
 
         player_id_to_creator_name_mapping = {}
         for creator_string in creator_strings:
+            if not creator_string or ":" not in creator_string:
+                continue
             creator_string_parts = creator_string.split(":")
-            player_id_to_creator_name_mapping[int(creator_string_parts[0])] = creator_string_parts[1]
+            player_id_to_creator_name_mapping[int(creator_string_parts[0])] = creator_string_parts[1] or 'Anonymous Creator'
 
         for level_string in level_strings:
             level = _parse_level(level_string, player_id_to_creator_name_mapping=player_id_to_creator_name_mapping)
@@ -265,4 +270,5 @@ def get_level(level_id: int) -> Level | None:
         return None
 
     response_parts = raw_response.split("#")
-    return _parse_level(response_parts[0], precalculated_author_name=response_parts[1].split(":")[1])
+    author_name = response_parts[1].split(":")[1] if len(response_parts) > 1 and ":" in response_parts[1] else None
+    return _parse_level(response_parts[0], precalculated_author_name=author_name or 'Anonymous Creator')

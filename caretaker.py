@@ -37,7 +37,7 @@ class Caretaker:
     @classmethod
     def load(cls) -> Caretaker:
         if CONFIG_PATH.is_file():
-            loaded_dict = json.loads(CONFIG_PATH.read_text())
+            loaded_dict = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
             loaded_dict["last_stream_processed_levels"] = set(loaded_dict.get("last_stream_processed_levels", []))
             return Caretaker(**loaded_dict)
 
@@ -47,7 +47,7 @@ class Caretaker:
     def save(self):
         saved_dict = asdict(self)
         saved_dict["last_stream_processed_levels"] = list(saved_dict.get("last_stream_processed_levels", []))
-        CONFIG_PATH.write_text(json.dumps(saved_dict, ensure_ascii=False, indent=4))
+        CONFIG_PATH.write_text(json.dumps(saved_dict, ensure_ascii=False, indent=4), encoding='utf-8')
 
     def get_last_broadcast_info(self) -> BroadcastInfo | None:
         return BroadcastInfo(self.last_stream_id, self.last_stream_is_youtube) if self.last_stream_id else None

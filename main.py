@@ -10,7 +10,7 @@ from component_builder import BasicText, build_button, build_horizontal_centered
 from gd import get_level, get_levels, LevelGrade, RequestedDifficulty
 from google_auth import get_credentials
 from caretaker import Caretaker
-from request_bot import construct_message_payload, construct_request_creation_payload, construct_request_pre_approval_payload, construct_request_resolution_payload, Request, RequestBotApiEndpoint, RequestBotApiWrapper, RequestBotRouteID
+from request_bot import construct_request_creation_payload, construct_request_pre_approval_payload, construct_request_resolution_payload, Request, RequestBotApiEndpoint, RequestBotApiWrapper
 from yt import YoutubeApiWrapper, YoutubeLiveStreamingDetails
 
 import sv_ttk
@@ -20,7 +20,7 @@ import twitch
 def normalize_bot_request(request_from_bot_api: Request) -> OpenRequest | None:
     try:
         level = get_level(request_from_bot_api.level_id)
-    except Exception:
+    except Exception:  # noqa
         return None
 
     if not level:
@@ -42,7 +42,7 @@ class Application:
     def get_current_broadcast(self) -> BroadcastInfo | None:
         try:
             yt_video_id = self.youtube.get_live_stream_video_id(self.caretaker.youtube_channel_id)
-        except Exception:
+        except Exception:  # noqa
             yt_video_id = None
 
         if yt_video_id:
@@ -50,7 +50,7 @@ class Application:
 
         try:
             twitch_stream_id = twitch.get_stream_id(self.caretaker.twitch_login)
-        except Exception:
+        except Exception:  # noqa
             twitch_stream_id = None
 
         if twitch_stream_id:
@@ -104,10 +104,9 @@ class Application:
 
         try:
             self.request_bot.post(
-                endpoint=RequestBotApiEndpoint.SEND_MESSAGE,
-                payload=construct_message_payload(
-                    text=announcement_text,
-                    target_route_id=RequestBotRouteID.START_ANNOUNCEMENT
+                endpoint=RequestBotApiEndpoint.SEND_STREAM_START_MESSAGE,
+                payload=dict(
+                    text=announcement_text
                 )
             )
         except Exception as e:
@@ -161,10 +160,10 @@ class Application:
         dump = self.dump_remaining_requests_var.get()
 
         try:
-            requests = self.app_script.close_remaining_requests(dump)
+            remaining_requests = self.app_script.close_remaining_requests(dump)
         except Exception as e:
             messagebox.showerror(None, f"Failed to close remaining requests in Google Sheets due to the exception: {e}\nYou might have to do it manually")
-            requests = []
+            remaining_requests = []
 
         if dump:
             try:
@@ -172,7 +171,7 @@ class Application:
                     RequestBotApiEndpoint.CREATE_REQUEST_BATCH,
                     [
                         construct_request_creation_payload(request, self.video_link)
-                        for request in requests
+                        for request in remaining_requests
                         if request.level_id != self.current_level_id
                     ]
                 )
@@ -181,10 +180,13 @@ class Application:
 
         try:
             self.request_bot.post(
-                endpoint=RequestBotApiEndpoint.SEND_MESSAGE,
-                payload=construct_message_payload(
+                endpoint=RequestBotApiEndpoint.SEND_STREAM_END_MESSAGE,
+                payload=dict(
                     text=self.caretaker.end_goodbye_text,
-                    target_route_id=RequestBotRouteID.END_GOODBYE
+                    not_reviewed=len(remaining_requests),
+                    approved=self.approved_cnt,
+                    rejected=self.rejected_cnt,
+                    later=self.later_cnt
                 )
             )
         except Exception as e:
@@ -202,7 +204,7 @@ class Application:
         pick_oldest = self.pick_oldest_var.get()
         try:
             picked_request = self.app_script.pick_open_request(pick_oldest)
-        except Exception:
+        except Exception:  # noqa
             picked_request = None
 
         is_from_bot = False
@@ -287,7 +289,7 @@ class Application:
         self.reject_btn.pack_forget()
         self.later_btn.pack_forget()
 
-    def pick_new_request_with_window_locking(self, is_first: bool) -> None:
+    def pick_new_request_and_unlock(self, is_first: bool) -> None:
         def callback_for_first_request():
             if self.pick_new_request():
                 self.shift_to_non_first_request_mode()
@@ -301,14 +303,24 @@ class Application:
                 self.request_details_entry.set_text("Pick the request to continue")
             self.root.grab_release()
 
+        self.root.after(10, callback_for_first_request if is_first else callback_for_non_first_request)  # noqa
+
+    def initiate_waiting(self) -> None:
         self.request_details_entry.set_text("Please wait")
         self.root.grab_set()
-        self.root.after(10, callback_for_first_request if is_first else callback_for_non_first_request)
 
     def on_pick_first_request_pressed(self) -> None:
-        self.pick_new_request_with_window_locking(is_first=True)
+        self.initiate_waiting()
+        self.pick_new_request_and_unlock(is_first=True)
 
     def on_opinion_btn_pressed(self, send_type: SendType) -> None:
+        self.initiate_waiting()
+
+        if send_type == SendType.NOT_SENT:
+            self.rejected_cnt += 1
+        else:
+            self.approved_cnt += 1
+
         try:
             self.request_bot.post(
                 endpoint=RequestBotApiEndpoint.RESOLVE_REQUEST,
@@ -328,9 +340,13 @@ class Application:
             messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}. You should mark the request as resolved manually")
             return
 
-        self.pick_new_request_with_window_locking(is_first=False)
+        self.pick_new_request_and_unlock(is_first=False)
 
     def on_later_pressed(self) -> None:
+        self.initiate_waiting()
+
+        self.later_cnt += 1
+
         try:
             self.request_bot.post(
                 endpoint=RequestBotApiEndpoint.PRE_APPROVE_REQUEST,
@@ -348,7 +364,7 @@ class Application:
             messagebox.showerror(None, f"Failed to access Google Sheets due to the exception: {e}. You should mark the request as resolved manually")
             return
 
-        self.pick_new_request_with_window_locking(is_first=False)
+        self.pick_new_request_and_unlock(is_first=False)
 
     def on_resend_form_link_pressed(self) -> None:
         if self.yt_live_streaming_details and self.yt_live_streaming_details.live_chat_id:
@@ -366,7 +382,7 @@ class Application:
     def process_new_responses(self) -> None:
         try:
             new_responses = self.app_script.get_new_responses()
-        except Exception:
+        except Exception:  # noqa
             return
 
         retrieved_levels = dict()
@@ -407,7 +423,7 @@ class Application:
 
         try:
             self.app_script.execute_function(AppsScriptFunction.CLEAR_NEW_RESPONSES)
-        except Exception:
+        except Exception:  # noqa
             pass  # It's fine, those responses will get filtered next time because we exclude requests made for the already processed level
 
         self.caretaker.last_stream_processed_levels |= set(retrieved_levels.keys())
@@ -428,6 +444,10 @@ class Application:
         self.current_request_timecode: int | None = None
         self.current_request_id: int | None = None
         self.current_level_id: int | None = None
+
+        self.approved_cnt = 0
+        self.rejected_cnt = 0
+        self.later_cnt = 0
 
         google_creds = get_credentials()
         self.app_script = AppsScriptApiWrapper(google_creds)
