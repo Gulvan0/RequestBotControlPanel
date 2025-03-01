@@ -66,7 +66,7 @@ class RequestBotApiWrapper:
     token: str
 
     def _get_url(self, endpoint: RequestBotApiEndpoint) -> str:
-        return self.root_url.removesuffix("/") + endpoint  # TODO: What if it's empty? Invalid? Account for those cases for every option, in every place it's used
+        return self.root_url.removesuffix("/") + endpoint
 
     def _get_headers(self) -> dict[str, str]:
         return {"x-key": self.token}
