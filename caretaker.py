@@ -22,8 +22,8 @@ Stream is over, thanks everyone!
 
 @dataclass
 class Caretaker:
-    api_root_url: str = ""  # TODO (iteration 17.3): Fill
-    api_token: str = ""
+    api_root_url: str = "REDACTED"
+    api_token: str = "REDACTED"
     youtube_channel_id: str = "UChO6WUVUrzGI7iklJHYsVYw"
     twitch_login: str = "kazvixx"
     form_link: str = "https://docs.google.com/forms/d/e/1FAIpQLSdiiNCszrGo6ISM3h8tVcJFa1l9JJ97GAUqiCJn-4yP_Q5Oeg/viewform?usp=header"
